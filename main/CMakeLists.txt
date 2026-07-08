@@ -1,2 +1,2 @@
-idf_component_register(SRCS "uart_events_example_main.c"
+idf_component_register(SRCS "main.c" "lora_uart.c"
                     INCLUDE_DIRS ".")
