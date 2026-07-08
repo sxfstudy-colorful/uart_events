@@ -1,0 +1,30 @@
+{
+  "configurations": [
+    {
+      "name": "ESP-IDF",
+      "compilerPath": "C:\\Espressif\\tools\\xtensa-esp-elf\\esp-13.2.0_20250707\\xtensa-esp-elf\\bin\\xtensa-esp32s3-elf-gcc.exe",
+      "compileCommands": "${config:idf.buildPath}\\compile_commands.json",
+      "intelliSenseMode": "gcc-x64",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "${env:IDF_PATH}\\components\\**",
+        "${env:IDF_PATH}\\components\\freertos\\FreeRTOS-Kernel\\include\\**",
+        "${env:IDF_PATH}\\components\\driver\\include\\**",
+        "${env:IDF_PATH}\\components\\esp_common\\include\\**",
+        "${env:IDF_PATH}\\components\\log\\include\\**"
+      ],
+      "browse": {
+        "path": [
+          "${workspaceFolder}",
+          "${env:IDF_PATH}\\components"
+        ],
+        "limitSymbolsToIncludedHeaders": true
+      },
+      "defines": [
+        "CONFIG_IDF_TARGET_ESP32S3",
+        "CONFIG_FREERTOS_HZ=100"
+      ]
+    }
+  ],
+  "version": 4
+}
