@@ -318,6 +318,11 @@ static void lora_module_at_config_task(void *pvParameters)
 void app_main(void)
 {
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
+    esp_log_level_set("CMD", ESP_LOG_DEBUG);       // cmd_parser引擎的逐字节打印(app_log.h垫片映射)
+    esp_log_level_set("LORA_MAIN", ESP_LOG_DEBUG); // 接收任务"Recv N bytes, feed M to parser"
+    esp_log_level_set("JOYSTICK", ESP_LOG_DEBUG);  // 每次采样的原始mV值
+    esp_log_level_set("LORA_UART", ESP_LOG_DEBUG); // 发送字节数明细
+    esp_log_level_set("FRAME", ESP_LOG_DEBUG);     // 组帧层(目前只有WARN,预留)
 
     ESP_LOGI(TAG, "==== DEVICE_ROLE=%d (TX_MOD=%d RX_MOD=%d) ====",
              DEVICE_ROLE, HAS_TX_MODULE, HAS_RX_MODULE);
