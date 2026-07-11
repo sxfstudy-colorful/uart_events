@@ -317,7 +317,7 @@ static void lora_module_at_config_task(void *pvParameters)
 
 void app_main(void)
 {
-    esp_log_level_set(TAG, ESP_LOG_INFO);
+    esp_log_level_set(TAG, ESP_LOG_DEBUG);
 
     ESP_LOGI(TAG, "==== DEVICE_ROLE=%d (TX_MOD=%d RX_MOD=%d) ====",
              DEVICE_ROLE, HAS_TX_MODULE, HAS_RX_MODULE);
