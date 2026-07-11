@@ -11,7 +11,8 @@
 #include "lora_uart.h"
 
 static const char *TAG = "LORA_UART";
-static at_mode_state_t g_at_state = AT_STATE_UNKNOWN;
+
+/* ===================== AUX / 复位等待 ===================== */
 
 bool wait_lora_idle(const lora_module_t *mod, uint32_t timeout_ms)
 {
@@ -73,7 +74,9 @@ bool wait_module_reset_complete(const lora_module_t *mod, uint32_t timeout_ms)
 #endif
 }
 
-void lora_uart_init(const lora_module_t *mod, QueueHandle_t *evt_queue)
+/* ===================== 初始化 ===================== */
+
+void lora_uart_init(lora_module_t *mod, QueueHandle_t *evt_queue)
 {
     uart_config_t uart_cfg = {
         .baud_rate = 9600,
@@ -88,6 +91,8 @@ void lora_uart_init(const lora_module_t *mod, QueueHandle_t *evt_queue)
     uart_param_config(mod->uart_num, &uart_cfg);
     uart_set_pin(mod->uart_num, mod->tx_pin, mod->rx_pin,
                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+
+    mod->at_state = AT_STATE_TRANSMIT; // 上电默认传输模式
 }
 
 void aux_gpio_init(gpio_num_t aux_pin)
@@ -101,6 +106,8 @@ void aux_gpio_init(gpio_num_t aux_pin)
     };
     gpio_config(&io_conf);
 }
+
+/* ===================== 工具 ===================== */
 
 void clear_uart_buffer(uart_port_t uart)
 {
@@ -130,7 +137,9 @@ char *get_response_string(uint8_t *buf, size_t len)
     return p;
 }
 
-esp_err_t send_plus_plus_plus(const lora_module_t *mod, at_mode_state_t *new_state)
+/* ===================== AT 原语 ===================== */
+
+esp_err_t send_plus_plus_plus(lora_module_t *mod, at_mode_state_t *new_state)
 {
     uint8_t recv_buf[64] = {0};
     int recv_len;
@@ -141,6 +150,7 @@ esp_err_t send_plus_plus_plus(const lora_module_t *mod, at_mode_state_t *new_sta
     vTaskDelay(pdMS_TO_TICKS(PLUS_GUARD_BEFORE_MS));
 
     ESP_LOGI(TAG, "%s: Send +++", mod->name);
+    // 注:实测本批模组固件需要+++带\r\n才应答(与手册描述不同,以实测为准)
     uart_write_bytes(uart, "+++\r\n", 5);
     uart_wait_tx_done(uart, pdMS_TO_TICKS(50));
 
@@ -173,7 +183,8 @@ esp_err_t send_plus_plus_plus(const lora_module_t *mod, at_mode_state_t *new_sta
         }
         else if (strstr(resp, "OK") != NULL)
         {
-            if (g_at_state == AT_STATE_COMMAND)
+            // 仅返回OK:按该模组当前状态推断切换方向
+            if (mod->at_state == AT_STATE_COMMAND)
             {
                 *new_state = AT_STATE_TRANSMIT;
                 ESP_LOGI(TAG, "%s: → Exited AT mode (OK)", mod->name);
@@ -199,12 +210,12 @@ esp_err_t send_plus_plus_plus(const lora_module_t *mod, at_mode_state_t *new_sta
 
     if (ret == ESP_OK)
     {
-        g_at_state = *new_state;
+        mod->at_state = *new_state;
     }
     return ret;
 }
 
-esp_err_t send_at_config_cmd(const lora_module_t *mod, const char *cmd, uint32_t timeout_ms)
+esp_err_t send_at_config_cmd(lora_module_t *mod, const char *cmd, uint32_t timeout_ms)
 {
     uint8_t recv_buf[128] = {0};
     size_t total = 0;
@@ -212,7 +223,7 @@ esp_err_t send_at_config_cmd(const lora_module_t *mod, const char *cmd, uint32_t
     char full_cmd[32];
     uart_port_t uart = mod->uart_num;
 
-    if (g_at_state != AT_STATE_COMMAND)
+    if (mod->at_state != AT_STATE_COMMAND)
     {
         ESP_LOGE(TAG, "%s: Not in AT mode, cmd: %s", mod->name, cmd);
         return ESP_FAIL;
@@ -237,8 +248,10 @@ esp_err_t send_at_config_cmd(const lora_module_t *mod, const char *cmd, uint32_t
         {
             total += recv_len;
             recv_buf[total] = '\0';
+            // 兼容手册中的EEROR拼写
             if (strstr((char *)recv_buf, "OK") != NULL ||
-                strstr((char *)recv_buf, "ERROR") != NULL)
+                strstr((char *)recv_buf, "ERROR") != NULL ||
+                strstr((char *)recv_buf, "EEROR") != NULL)
             {
                 break;
             }
@@ -253,12 +266,14 @@ esp_err_t send_at_config_cmd(const lora_module_t *mod, const char *cmd, uint32_t
         {
             return ESP_OK;
         }
-        if (strstr(resp, "ERROR") != NULL)
+        if (strstr(resp, "ERROR") != NULL || strstr(resp, "EEROR") != NULL)
         {
             ESP_LOGE(TAG, "%s: AT error: %s", mod->name, resp);
             return ESP_FAIL;
         }
-        if (strstr(resp, "+MODE=") != NULL || strstr(resp, "+LEVEL=") != NULL)
+        // 兜底:参数回显已到但OK丢失(如被复位截断),回显正确即已被接受
+        if (strstr(resp, "+MODE=") != NULL || strstr(resp, "+LEVEL=") != NULL ||
+            strstr(resp, "+MAC=") != NULL || strstr(resp, "+CHANNEL=") != NULL)
         {
             ESP_LOGW(TAG, "%s: No OK but got echo, treat as success", mod->name);
             return ESP_OK;
@@ -269,7 +284,7 @@ esp_err_t send_at_config_cmd(const lora_module_t *mod, const char *cmd, uint32_t
     return ESP_FAIL;
 }
 
-esp_err_t send_at_query_cmd(const lora_module_t *mod, const char *cmd,
+esp_err_t send_at_query_cmd(lora_module_t *mod, const char *cmd,
                             const char *key, int *value, uint32_t timeout_ms)
 {
     uint8_t recv_buf[128] = {0};
@@ -278,16 +293,16 @@ esp_err_t send_at_query_cmd(const lora_module_t *mod, const char *cmd,
     char full_cmd[32];
     uart_port_t uart = mod->uart_num;
 
-    if (g_at_state != AT_STATE_COMMAND)
+    if (mod->at_state != AT_STATE_COMMAND)
     {
-        ESP_LOGE(TAG, "%s: Not in AT mode, query: %s", mod->name, cmd);
+        ESP_LOGE(TAG, "%s: Not in AT mode, cannot query: %s", mod->name, cmd);
         return ESP_FAIL;
     }
 
     clear_uart_buffer(uart);
 
     snprintf(full_cmd, sizeof(full_cmd), "%s\r\n", cmd);
-    ESP_LOGI(TAG, "%s: Send query: %s", mod->name, cmd);
+    ESP_LOGI(TAG, "%s: Send AT query: %s", mod->name, cmd);
     uart_write_bytes(uart, full_cmd, strlen(full_cmd));
     uart_wait_tx_done(uart, pdMS_TO_TICKS(50));
 
@@ -304,7 +319,8 @@ esp_err_t send_at_query_cmd(const lora_module_t *mod, const char *cmd,
         total += recv_len;
         recv_buf[total] = '\0';
 
-        if (strstr((char *)recv_buf, "ERROR") != NULL)
+        if (strstr((char *)recv_buf, "ERROR") != NULL ||
+            strstr((char *)recv_buf, "EEROR") != NULL)
         {
             ESP_LOGE(TAG, "%s: Query got ERROR", mod->name);
             return ESP_FAIL;
@@ -314,10 +330,11 @@ esp_err_t send_at_query_cmd(const lora_module_t *mod, const char *cmd,
         if (p != NULL)
         {
             char *digit = p + strlen(key);
-            if (isdigit((unsigned char)*digit))
+            // 十六进制解析(CHANNEL等应答为hex;MODE/LEVEL单数字hex==dec,统一hex安全)
+            if (isxdigit((unsigned char)*digit))
             {
-                *value = atoi(digit);
-                ESP_LOGI(TAG, "%s: %s → %s%d", mod->name, cmd, key, *value);
+                *value = (int)strtol(digit, NULL, 16);
+                ESP_LOGI(TAG, "%s: %s → %s%X", mod->name, cmd, key, *value);
                 return ESP_OK;
             }
         }
@@ -335,7 +352,7 @@ esp_err_t send_at_query_cmd(const lora_module_t *mod, const char *cmd,
     return ESP_FAIL;
 }
 
-esp_err_t send_plus_plus_plus_retry(const lora_module_t *mod,
+esp_err_t send_plus_plus_plus_retry(lora_module_t *mod,
                                     at_mode_state_t *new_state, uint8_t retry_max)
 {
     esp_err_t ret;
@@ -354,8 +371,8 @@ esp_err_t send_plus_plus_plus_retry(const lora_module_t *mod,
     return ESP_FAIL;
 }
 
-esp_err_t send_at_config_cmd_retry(const lora_module_t *mod,
-                                   const char *cmd, uint32_t timeout_ms, uint8_t retry_max)
+esp_err_t send_at_config_cmd_retry(lora_module_t *mod, const char *cmd,
+                                   uint32_t timeout_ms, uint8_t retry_max)
 {
     esp_err_t ret;
     for (uint8_t i = 0; i < retry_max; i++)
@@ -371,17 +388,19 @@ esp_err_t send_at_config_cmd_retry(const lora_module_t *mod,
     return ESP_FAIL;
 }
 
-void send_at_reset_no_wait(const lora_module_t *mod)
+void send_at_reset_no_wait(lora_module_t *mod)
 {
     uart_port_t uart = mod->uart_num;
     ESP_LOGI(TAG, "%s: Send AT+RESET (no wait)", mod->name);
     uart_write_bytes(uart, "AT+RESET\r\n", 10);
     uart_wait_tx_done(uart, pdMS_TO_TICKS(50));
-    g_at_state = AT_STATE_TRANSMIT;
+    mod->at_state = AT_STATE_TRANSMIT;
     wait_module_reset_complete(mod, 3000);
 }
 
-bool configure_lora_module(const lora_module_t *mod)
+/* ===================== 配置与验证 ===================== */
+
+bool configure_lora_module(lora_module_t *mod)
 {
     at_mode_state_t new_state;
 
@@ -391,7 +410,7 @@ bool configure_lora_module(const lora_module_t *mod)
     ESP_LOGI(TAG, "%s: AUX level: %d", mod->name, gpio_get_level(mod->aux_pin));
 #endif
 
-    g_at_state = AT_STATE_TRANSMIT;
+    mod->at_state = AT_STATE_TRANSMIT;
     if (send_plus_plus_plus_retry(mod, &new_state, AT_RETRY_MAX) != ESP_OK)
     {
         ESP_LOGE(TAG, "%s: Failed to enter AT mode", mod->name);
@@ -400,29 +419,31 @@ bool configure_lora_module(const lora_module_t *mod)
 
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    char mode_cmd[16];
-    char level_cmd[16];
-    char mac_cmd[24];
-    char channel_cmd[24];
-    snprintf(mode_cmd, sizeof(mode_cmd), "AT+MODE%d", mod->mode);
-    snprintf(level_cmd, sizeof(level_cmd), "AT+LEVEL%d", mod->level);
-    snprintf(mac_cmd, sizeof(mac_cmd), "AT+MAC%02X,%02X", mod->addr_h, mod->addr_l);
-    snprintf(channel_cmd, sizeof(channel_cmd), "AT+CHANNEL%02X", mod->channel);
-
+    char cmd_buf[24];
     bool config_ok = true;
-    config_ok &= (send_at_config_cmd_retry(mod, mode_cmd, 800, AT_RETRY_MAX) == ESP_OK);
-    vTaskDelay(pdMS_TO_TICKS(50));
-    config_ok &= (send_at_config_cmd_retry(mod, level_cmd, 800, AT_RETRY_MAX) == ESP_OK);
+
+    // 传输模式
+    snprintf(cmd_buf, sizeof(cmd_buf), "AT+MODE%d", mod->mode);
+    config_ok &= (send_at_config_cmd_retry(mod, cmd_buf, 800, AT_RETRY_MAX) == ESP_OK);
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    if (mod->mode == 0)
+    // 速率等级
+    snprintf(cmd_buf, sizeof(cmd_buf), "AT+LEVEL%d", mod->level);
+    config_ok &= (send_at_config_cmd_retry(mod, cmd_buf, 800, AT_RETRY_MAX) == ESP_OK);
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    // 工作信道:所有模式都必须配置!
+    // 定点模式下信道决定本模组的监听频点;此前仅透明模式配信道,
+    // 同桌调试因距离过近碰巧跨信道收到(手册5.3.6备注3),拉开距离即断链
+    snprintf(cmd_buf, sizeof(cmd_buf), "AT+CHANNEL%02X", mod->channel);
+    config_ok &= (send_at_config_cmd_retry(mod, cmd_buf, 800, AT_RETRY_MAX) == ESP_OK);
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    // 设备地址:定点/广播模式需要
+    if (mod->mode != 0)
     {
-        config_ok &= (send_at_config_cmd_retry(mod, channel_cmd, 800, AT_RETRY_MAX) == ESP_OK);
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-    else
-    {
-        config_ok &= (send_at_config_cmd_retry(mod, mac_cmd, 800, AT_RETRY_MAX) == ESP_OK);
+        snprintf(cmd_buf, sizeof(cmd_buf), "AT+MAC%02X,%02X", mod->addr_h, mod->addr_l);
+        config_ok &= (send_at_config_cmd_retry(mod, cmd_buf, 800, AT_RETRY_MAX) == ESP_OK);
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 
@@ -432,6 +453,7 @@ bool configure_lora_module(const lora_module_t *mod)
         return false;
     }
 
+    // 手册规则:参数设置后必须重启生效
     ESP_LOGI(TAG, "%s: Send AT+RESET to apply config...", mod->name);
     send_at_reset_no_wait(mod);
 
@@ -439,51 +461,45 @@ bool configure_lora_module(const lora_module_t *mod)
     return true;
 }
 
-bool verify_module_config(const lora_module_t *mod, int expect_mode, int expect_level)
+bool verify_module_config(lora_module_t *mod)
 {
     at_mode_state_t new_state;
-    int mode_val = -1, level_val = -1;
+    int mode_val = -1, level_val = -1, chan_val = -1;
     bool ok = true;
 
     ESP_LOGI(TAG, "---- Verify %s ----", mod->name);
 
-    g_at_state = AT_STATE_TRANSMIT;
+    mod->at_state = AT_STATE_TRANSMIT;
     if (send_plus_plus_plus_retry(mod, &new_state, 2) != ESP_OK)
     {
         ESP_LOGW(TAG, "%s: Cannot enter AT mode for verify", mod->name);
         return false;
     }
 
-    if (send_at_query_cmd(mod, "AT+MODE", "+MODE=", &mode_val, 800) == ESP_OK)
+    if (send_at_query_cmd(mod, "AT+MODE", "+MODE=", &mode_val, 800) != ESP_OK ||
+        mode_val != mod->mode)
     {
-        if (mode_val != expect_mode)
-        {
-            ESP_LOGE(TAG, "%s: MODE=%d, expect %d", mod->name, mode_val, expect_mode);
-            ok = false;
-        }
-    }
-    else
-    {
-        ESP_LOGW(TAG, "%s: MODE query failed", mod->name);
+        ESP_LOGE(TAG, "%s: MODE=%d, expect %d", mod->name, mode_val, mod->mode);
         ok = false;
     }
-
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    if (send_at_query_cmd(mod, "AT+LEVEL", "+LEVEL=", &level_val, 800) == ESP_OK)
+    if (send_at_query_cmd(mod, "AT+LEVEL", "+LEVEL=", &level_val, 800) != ESP_OK ||
+        level_val != mod->level)
     {
-        if (level_val != expect_level)
-        {
-            ESP_LOGE(TAG, "%s: LEVEL=%d, expect %d", mod->name, level_val, expect_level);
-            ok = false;
-        }
+        ESP_LOGE(TAG, "%s: LEVEL=%d, expect %d", mod->name, level_val, mod->level);
+        ok = false;
     }
-    else
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    if (send_at_query_cmd(mod, "AT+CHANNEL", "+CHANNEL=", &chan_val, 800) != ESP_OK ||
+        chan_val != mod->channel)
     {
-        ESP_LOGW(TAG, "%s: LEVEL query failed", mod->name);
+        ESP_LOGE(TAG, "%s: CHANNEL=%02X, expect %02X", mod->name, chan_val, mod->channel);
         ok = false;
     }
 
+    // 退出AT模式回传输态
     if (send_plus_plus_plus(mod, &new_state) == ESP_OK &&
         new_state == AT_STATE_TRANSMIT)
     {
@@ -495,12 +511,12 @@ bool verify_module_config(const lora_module_t *mod, int expect_mode, int expect_
         send_at_reset_no_wait(mod);
     }
 
-    ESP_LOGI(TAG, "%s: Verify %s (MODE=%d, LEVEL=%d)",
-             mod->name, ok ? "PASS" : "FAIL", mode_val, level_val);
+    ESP_LOGI(TAG, "%s: Verify %s (MODE=%d LEVEL=%d CH=%02X)",
+             mod->name, ok ? "PASS" : "FAIL", mode_val, level_val, chan_val);
     return ok;
 }
 
-bool configure_and_verify(const lora_module_t *mod)
+bool configure_and_verify(lora_module_t *mod)
 {
     for (int attempt = 1; attempt <= CONFIG_VERIFY_ATTEMPTS; attempt++)
     {
@@ -521,7 +537,7 @@ bool configure_and_verify(const lora_module_t *mod)
             return true;
         }
 
-        if (verify_module_config(mod, mod->mode, mod->level))
+        if (verify_module_config(mod))
         {
             return true;
         }
@@ -529,31 +545,36 @@ bool configure_and_verify(const lora_module_t *mod)
     return false;
 }
 
-void build_lora_packet(const lora_module_t *mod, const char *src, uint8_t *dst)
-{
-    if (mod->mode == 0)
-    {
-        memcpy(dst, src, strlen(src));
-    }
-    else
-    {
-        dst[0] = mod->target_addr_h;
-        dst[1] = mod->target_addr_l;
-        dst[2] = mod->target_channel;
-        memcpy(&dst[3], src, strlen(src));
-    }
-}
+/* ===================== 数据发送 ===================== */
 
-esp_err_t lora_send_data(const lora_module_t *mod, const char *data)
+esp_err_t lora_send_bytes(lora_module_t *mod, const uint8_t *data, size_t len)
 {
-    if (mod == NULL || data == NULL)
+    if (mod == NULL || data == NULL || len == 0)
     {
         return ESP_ERR_INVALID_ARG;
     }
 
+    // LoRa传输头开销:定点=3字节(地址2+信道1),广播=1字节,透明=0
+    size_t head_len = (mod->mode == 1) ? 3 : (mod->mode == 2) ? 1
+                                                              : 0;
+    if (len + head_len > LORA_UART_BUF_SIZE)
+    {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
     uint8_t tx_packet[LORA_UART_BUF_SIZE];
-    build_lora_packet(mod, data, tx_packet);
-    int pkt_len = (mod->mode == 0) ? strlen(data) : (3 + strlen(data));
+    size_t idx = 0;
+    if (mod->mode == 1)
+    {
+        tx_packet[idx++] = mod->target_addr_h;
+        tx_packet[idx++] = mod->target_addr_l;
+        tx_packet[idx++] = mod->target_channel;
+    }
+    else if (mod->mode == 2)
+    {
+        tx_packet[idx++] = mod->target_channel;
+    }
+    memcpy(&tx_packet[idx], data, len);
 
     if (!wait_lora_idle(mod, AUX_WAIT_TIMEOUT))
     {
@@ -561,8 +582,17 @@ esp_err_t lora_send_data(const lora_module_t *mod, const char *data)
         return ESP_ERR_TIMEOUT;
     }
 
-    uart_write_bytes(mod->uart_num, tx_packet, pkt_len);
-    ESP_LOGI(TAG, "%s: Sent %d bytes", mod->name, pkt_len);
-
+    uart_write_bytes(mod->uart_num, tx_packet, idx + len);
+    ESP_LOGD(TAG, "%s: Sent %d bytes (payload %d + head %d)",
+             mod->name, (int)(idx + len), (int)len, (int)head_len);
     return ESP_OK;
+}
+
+esp_err_t lora_send_data(lora_module_t *mod, const char *data)
+{
+    if (data == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return lora_send_bytes(mod, (const uint8_t *)data, strlen(data));
 }
