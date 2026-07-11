@@ -11,7 +11,6 @@
 #include "comm_frame.h"
 #include "cmds.h"
 #include "joystick.h"
-#include "cmds.h"
 
 static const char *TAG = "LORA_MAIN";
 
@@ -99,7 +98,7 @@ static uint32_t s_last_rx_msg_id = 0; // 丢包检测用
  * @brief 摇杆消息处理
  * 【实际控制逻辑接入点】:后续在此驱动电机/舵机等执行机构
  */
-static void handle_joystick_pkt(const uint8_t *packet, uint16_t len)
+static void handle_joystick_pkt(const lora_module_t *mod, const uint8_t *packet, uint16_t len)
 {
     joystick_msg_t js = {0};
     uint32_t msg_id = 0;
@@ -107,21 +106,22 @@ static void handle_joystick_pkt(const uint8_t *packet, uint16_t len)
     cmd_status_t st = joystick_msg_parse(packet, len, &msg_id, &js);
     if (st != CMD_SUCCESS)
     {
-        ESP_LOGW(TAG, "Joystick parse failed: %d", st);
+        ESP_LOGW(TAG, "%s: Joystick parse failed: %d", mod->name, st);
         return;
     }
 
     // 基于msg_id的简易丢包检测
     if (s_last_rx_msg_id != 0 && msg_id > s_last_rx_msg_id + 1)
     {
-        ESP_LOGW(TAG, "Packet loss: expect id %lu, got %lu (lost %lu)",
+        ESP_LOGW(TAG, "%s: Packet loss: expect id %lu, got %lu (lost %lu)",
+                 mod->name,
                  (unsigned long)(s_last_rx_msg_id + 1), (unsigned long)msg_id,
                  (unsigned long)(msg_id - s_last_rx_msg_id - 1));
     }
     s_last_rx_msg_id = msg_id;
 
-    ESP_LOGI(TAG, ">>> Joystick[%lu]: X=%-5d Y=%-5d BTN=0x%02X",
-             (unsigned long)msg_id, js.x, js.y, js.buttons);
+    ESP_LOGI(TAG, "%s: >>> Joystick[%lu]: X=%-5d Y=%-5d BTN=0x%02X",
+             mod->name, (unsigned long)msg_id, js.x, js.y, js.buttons);
     // TODO: 执行机构控制,如 motor_set_speed(js.x, js.y);
 }
 
@@ -130,7 +130,7 @@ static void handle_joystick_pkt(const uint8_t *packet, uint16_t len)
  */
 static void on_cmd_packet(const uint8_t *packet, uint16_t len, void *ctx)
 {
-    (void)ctx;
+    const lora_module_t *mod = (const lora_module_t *)ctx; // 由frame_parser_feed透传
     uint8_t pkt_type = unknown_pkt_type;
     if (cmd_extract_pkt_type(packet, len, &pkt_type) != CMD_SUCCESS)
     {
@@ -140,21 +140,21 @@ static void on_cmd_packet(const uint8_t *packet, uint16_t len, void *ctx)
     switch ((cmd_pkt_type_t)pkt_type)
     {
     case joystick_pkt_type:
-        handle_joystick_pkt(packet, len);
+        handle_joystick_pkt(mod, packet, len);
         break;
 
     case heart_beat_pkt_type:
     {
         uint32_t msg_id = 0;
         cmd_extract_pkt_msg_id(packet, len, &msg_id);
-        ESP_LOGI(TAG, ">>> Heartbeat msg_id=%lu", (unsigned long)msg_id);
+        ESP_LOGI(TAG, "%s: >>> Heartbeat msg_id=%lu", mod->name, (unsigned long)msg_id);
         break;
     }
 
         // 新消息类型在此追加case,并在对应xxx_msg.c实现parse
 
     default:
-        ESP_LOGW(TAG, "Unknown pkt_type 0x%02X (len=%u)", pkt_type, len);
+        ESP_LOGW(TAG, "%s: Unknown pkt_type 0x%02X (len=%u)", mod->name, pkt_type, len);
         break;
     }
 }

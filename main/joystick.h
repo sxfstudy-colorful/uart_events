@@ -11,9 +11,10 @@ extern "C"
 
     /*
      * 摇杆采集抽象接口。
-     * 当前实现为模拟桩(生成周期变化的仿真数据),用于无摇杆硬件时
-     * 联调整条通信链路;接入真实摇杆(ADC)时只需重写 joystick.c,
-     * 接口与上层调用完全不变。
+     * 当前实现:PS2双轴摇杆ADC采集(joystick.c),
+     * URX/URY走ADC1多重采样+校准+中位自校准+死区,Z为数字按键。
+     * 引脚与参数在 board_config.h 的摇杆硬件段配置。
+     * 上层(main.c的joystick_tx_task)只依赖本接口,与实现解耦。
      */
 
     typedef struct

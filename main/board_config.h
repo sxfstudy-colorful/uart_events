@@ -16,7 +16,7 @@
 #define ROLE_RECEIVER 2   // 接收器:仅接收模组
 
 // 【迁移到两块板时,各自只改这一行】
-#define DEVICE_ROLE ROLE_DUAL_DEBUG
+#define DEVICE_ROLE ROLE_CONTROLLER
 
 /* 由角色派生的模块存在性,后续所有条件编译只看这两个宏 */
 #if (DEVICE_ROLE == ROLE_DUAL_DEBUG)
@@ -63,6 +63,21 @@
 #define CONTROLLER_ADDR_H 0x00 // 遥控器地址 0002
 #define CONTROLLER_ADDR_L 0x02
 #define CONTROLLER_CHANNEL 0x02 // 遥控器监听信道(为将来回传预留)
+
+/* ---------- 摇杆硬件(HAS_TX_MODULE=1 时有效) ----------
+ * PS2双轴摇杆模块:URX/URY模拟量 + Z数字按键
+ * 【重要】模块必须3.3V供电!5V供电时满偏输出5V会超ADC引脚耐压。
+ * ADC必须用ADC1(GPIO1~10),ADC2与WiFi冲突。
+ */
+#define JOYSTICK_X_GPIO GPIO_NUM_1 // URX → ADC1_CH0
+#define JOYSTICK_Y_GPIO GPIO_NUM_2 // URY → ADC1_CH1
+#define JOYSTICK_Z_GPIO GPIO_NUM_4 // Z按键,数字输入(内部上拉,按下=低)
+
+#define JOYSTICK_ADC_SAMPLES 8  // 每次读取的多重采样次数(均值滤噪)
+#define JOYSTICK_CAL_SAMPLES 32 // 上电中位自校准采样次数(此时勿碰摇杆)
+#define JOYSTICK_DEADZONE 50    // 死区(归一化±1000量程下,即5%)
+#define JOYSTICK_INVERT_X 0     // 方向反了改1
+#define JOYSTICK_INVERT_Y 0
 
 /* ---------- 业务参数 ---------- */
 #define JOYSTICK_SEND_INTERVAL_MS 1000 // 摇杆状态发送周期(调试期1s,实际控制可降至50~100ms)
