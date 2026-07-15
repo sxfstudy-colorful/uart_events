@@ -49,3 +49,11 @@ cmd_status_t heartbeat_write(uint8_t *tx_buf, uint16_t tx_buf_len, uint16_t *tx_
         tx_buf, tx_buf_len, tx_len, heart_beat_pkt_type, msg_id,
         NULL, 0, NULL, 0);
 }
+
+cmd_status_t link_ack_write(uint8_t *tx_buf, uint16_t tx_buf_len, uint16_t *tx_len,
+                            uint32_t acked_msg_id)
+{
+    return cmd_data_write(
+        tx_buf, tx_buf_len, tx_len, link_ack_pkt_type, acked_msg_id,
+        NULL, 0, NULL, 0);
+}

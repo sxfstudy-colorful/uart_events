@@ -61,6 +61,7 @@ typedef enum
 
     // 0x01-0x1f 保留给系统使用
     heart_beat_pkt_type = 0x02,
+    link_ack_pkt_type = 0x05, // 链路ACK:msg_id回显被确认包的id,无字段
 
     // 0x20-0x5f 保留给设置使用
 
@@ -110,5 +111,8 @@ cmd_status_t joystick_msg_write(uint8_t *tx_buf, uint16_t tx_buf_len, uint16_t *
 // 心跳(无字段,仅type+msg_id)
 cmd_status_t heartbeat_write(uint8_t *tx_buf, uint16_t tx_buf_len, uint16_t *tx_len,
                              uint32_t msg_id);
+
+cmd_status_t link_ack_write(uint8_t *tx_buf, uint16_t tx_buf_len, uint16_t *tx_len,
+                            uint32_t acked_msg_id);
 
 #endif // CMDS_H
