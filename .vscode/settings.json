@@ -15,5 +15,6 @@
     "--compile-commands-dir=f:\\Projects\\2003-ESP32S3\\Projects\\uart_events\\build"
   ],
   "idf.flashType": "UART",
-  "idf.portWin": "COM6"
+  "idf.portWin": "COM6",
+  "idf.port": "/dev/cu.usbmodem6C4D0229771"
 }
