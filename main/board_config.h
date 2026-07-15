@@ -91,7 +91,7 @@
 #define JOYSTICK_INVERT_Y 0
 
 /* ---------- 业务参数 ---------- */
-#define JOYSTICK_SEND_INTERVAL_MS 50 // 摇杆状态发送周期(调试期1s,实际控制可降至50~100ms)
+#define JOYSTICK_SEND_INTERVAL_MS 1000 // 摇杆状态发送周期(调试期1s,实际控制可降至50~100ms)
 
 /* 链路ACK:接收器每收到一包摇杆数据回一个ACK,发送器据此在本地日志
  * 自证送达——两块板独立部署时无需同时盯两个串口即可检验链路。
