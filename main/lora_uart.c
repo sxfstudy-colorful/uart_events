@@ -141,8 +141,9 @@ char *get_response_string(uint8_t *buf, size_t len)
 
 esp_err_t send_plus_plus_plus(lora_module_t *mod, at_mode_state_t *new_state)
 {
-    uint8_t recv_buf[64] = {0};
+    uint8_t recv_buf[128] = {0};
     int recv_len;
+    size_t total = 0;
     esp_err_t ret = ESP_FAIL;
     uart_port_t uart = mod->uart_num;
 
@@ -150,61 +151,83 @@ esp_err_t send_plus_plus_plus(lora_module_t *mod, at_mode_state_t *new_state)
     vTaskDelay(pdMS_TO_TICKS(PLUS_GUARD_BEFORE_MS));
 
     ESP_LOGI(TAG, "%s: Send +++", mod->name);
-    // 注:实测本批模组固件需要+++带\r\n才应答(与手册描述不同,以实测为准)
     uart_write_bytes(uart, "+++\r\n", 5);
     uart_wait_tx_done(uart, pdMS_TO_TICKS(50));
 
     recv_len = uart_read_bytes(uart, recv_buf, sizeof(recv_buf) - 1,
                                pdMS_TO_TICKS(PLUS_RESP_TIMEOUT_MS));
 
-    if (recv_len > 0)
+    if (recv_len <= 0)
     {
-        recv_buf[recv_len] = '\0';
-        char *resp = get_response_string(recv_buf, recv_len);
-        ESP_LOGI(TAG, "%s: +++ Response: [%s]", mod->name, resp);
+        ESP_LOGW(TAG, "%s: No response to +++", mod->name);
+        return ESP_FAIL;
+    }
 
-        if (strstr(resp, "Entry AT") != NULL)
+    total = recv_len;
+    recv_buf[total] = '\0';
+    char *resp = get_response_string(recv_buf, total);
+    ESP_LOGI(TAG, "%s: +++ Response: [%s]", mod->name, resp);
+
+    if (strstr(resp, "Entry AT") != NULL)
+    {
+        *new_state = AT_STATE_COMMAND;
+        ret = ESP_OK;
+        ESP_LOGI(TAG, "%s: → Entered AT mode", mod->name);
+    }
+    else if (strstr(resp, "Exit AT") != NULL)
+    {
+        *new_state = AT_STATE_TRANSMIT;
+        ret = ESP_OK;
+        ESP_LOGI(TAG, "%s: → Exited AT mode", mod->name);
+        ESP_LOGI(TAG, "%s: Draining remaining responses...", mod->name);
+        for (;;)
         {
-            *new_state = AT_STATE_COMMAND;
-            ret = ESP_OK;
-            ESP_LOGI(TAG, "%s: → Entered AT mode", mod->name);
+            memset(recv_buf, 0, sizeof(recv_buf));
+            recv_len = uart_read_bytes(uart, recv_buf, sizeof(recv_buf) - 1,
+                                       pdMS_TO_TICKS(500));
+            if (recv_len <= 0)
+                break;
+            recv_buf[recv_len] = '\0';
+            ESP_LOGI(TAG, "%s: Extra resp: [%s]", mod->name,
+                     get_response_string(recv_buf, recv_len));
         }
-        else if (strstr(resp, "Exit AT") != NULL)
+        ESP_LOGI(TAG, "%s: → UART buffer cleared", mod->name);
+    }
+    else if (strstr(resp, "Power On") != NULL || strstr(resp, "Power on") != NULL)
+    {
+        *new_state = AT_STATE_TRANSMIT;
+        ret = ESP_OK;
+        ESP_LOGI(TAG, "%s: → Module in transmit mode (power on)", mod->name);
+    }
+    else if (strstr(resp, "OK") != NULL)
+    {
+        if (mod->at_state == AT_STATE_COMMAND)
         {
             *new_state = AT_STATE_TRANSMIT;
-            ret = ESP_OK;
-            ESP_LOGI(TAG, "%s: → Exited AT mode, resetting...", mod->name);
-        }
-        else if (strstr(resp, "Power On") != NULL)
-        {
-            *new_state = AT_STATE_TRANSMIT;
-            ret = ESP_OK;
-            ESP_LOGI(TAG, "%s: → Reset complete", mod->name);
-        }
-        else if (strstr(resp, "OK") != NULL)
-        {
-            // 仅返回OK:按该模组当前状态推断切换方向
-            if (mod->at_state == AT_STATE_COMMAND)
+            ESP_LOGI(TAG, "%s: → Exited AT mode (OK)", mod->name);
+            for (;;)
             {
-                *new_state = AT_STATE_TRANSMIT;
-                ESP_LOGI(TAG, "%s: → Exited AT mode (OK)", mod->name);
+                memset(recv_buf, 0, sizeof(recv_buf));
+                recv_len = uart_read_bytes(uart, recv_buf, sizeof(recv_buf) - 1,
+                                           pdMS_TO_TICKS(500));
+                if (recv_len <= 0)
+                    break;
+                recv_buf[recv_len] = '\0';
+                ESP_LOGI(TAG, "%s: Extra resp: [%s]", mod->name,
+                         get_response_string(recv_buf, recv_len));
             }
-            else
-            {
-                *new_state = AT_STATE_COMMAND;
-                ESP_LOGI(TAG, "%s: → Entered AT mode (OK)", mod->name);
-            }
-            ret = ESP_OK;
+            ESP_LOGI(TAG, "%s: → UART buffer cleared", mod->name);
         }
         else
         {
-            ESP_LOGW(TAG, "%s: Unknown +++ response: %s", mod->name, resp);
-            ret = ESP_FAIL;
+            *new_state = AT_STATE_COMMAND;
+            ESP_LOGI(TAG, "%s: → Entered AT mode (OK)", mod->name);
         }
+        ret = ESP_OK;
     }
     else
     {
-        ESP_LOGW(TAG, "%s: No response to +++", mod->name);
+        ESP_LOGW(TAG, "%s: Unknown +++ response: %s", mod->name, resp);
         ret = ESP_FAIL;
     }
 

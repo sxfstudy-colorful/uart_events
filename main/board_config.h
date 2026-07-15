@@ -53,16 +53,16 @@
  * 注意:定点模式下"信道"决定接收方监听频点,收发双方的
  *      目标信道/自身信道必须按此表对齐。
  */
-#define LORA_NET_LEVEL 3 // 空中速率等级(收发必须一致)
+#define LORA_NET_LEVEL 1 // 空中速率等级(收发必须一致)
 #define LORA_NET_MODE 1  // 1=定点传输
 
 #define RECEIVER_ADDR_H 0x00 // 接收器地址 0001
 #define RECEIVER_ADDR_L 0x01
-#define RECEIVER_CHANNEL 0x29 // 接收器监听信道
+#define RECEIVER_CHANNEL 0x00 // 接收器监听信道
 
 #define CONTROLLER_ADDR_H 0x00 // 遥控器地址 0002
 #define CONTROLLER_ADDR_L 0x02
-#define CONTROLLER_CHANNEL 0x29 // 遥控器监听信道(为将来回传预留)
+#define CONTROLLER_CHANNEL 0x00 // 遥控器监听信道(为将来回传预留)
 
 /* ---------- 摇杆硬件(HAS_TX_MODULE=1 时有效) ----------
  * PS2双轴摇杆模块:URX/URY模拟量 + Z数字按键
