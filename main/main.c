@@ -103,9 +103,32 @@ static radio_rx_ctx_t s_tx_mod_ctx = {.mod = &g_tx_module};
 
 static uint32_t s_last_rx_msg_id = 0;
 
-/* ---------- 链路状态 ---------- */
+/* ---------- 链路状态(接收侧:基于摇杆包超时) ---------- */
 static volatile bool s_link_up = false;
 static volatile TickType_t s_last_joystick_tick = 0;
+
+#if HAS_TX_MODULE
+/* ---------- 链路状态(发送侧:基于心跳ACK超时) ----------
+ * heartbeat_tx_task 每拍发送前检查上一拍是否已被ACK;
+ * 连续 HEARTBEAT_MISS_LINK_DOWN 拍无ACK → 判定TX侧断链。
+ * ACK到达(on_cmd_packet)立即清零miss计数并恢复链路状态。
+ */
+static volatile uint32_t s_hb_last_acked_id = 0; // 已被ACK的最大心跳msg_id
+static volatile uint32_t s_hb_miss_count = 0;    // 连续无ACK计数
+static volatile bool s_tx_link_up = false;       // 发送侧链路状态
+
+static void tx_link_down(void)
+{
+    ESP_LOGE(TAG, "!!! TX LINK DOWN: %d heartbeats unacked, receiver lost !!!",
+             HEARTBEAT_MISS_LINK_DOWN);
+    // 在此挂接发送侧断链动作:如状态LED、震动提示、停止高频发送等
+}
+
+static void tx_link_up(void)
+{
+    ESP_LOGW(TAG, "=== TX LINK UP: heartbeat ACK received ===");
+}
+#endif
 
 static void failsafe_activate(void)
 {
@@ -190,6 +213,18 @@ static void on_cmd_packet(const uint8_t *packet, uint16_t len, void *ctx)
         uint32_t acked_msg_id = 0;
         cmd_extract_pkt_msg_id(packet, len, &acked_msg_id);
         ESP_LOGI(TAG, "%s: <<< Heartbeat ACK received for msg_id=%lu", mod->name, (unsigned long)acked_msg_id);
+#if HAS_TX_MODULE
+        if (acked_msg_id > s_hb_last_acked_id)
+        {
+            s_hb_last_acked_id = acked_msg_id;
+        }
+        s_hb_miss_count = 0;
+        if (!s_tx_link_up)
+        {
+            s_tx_link_up = true;
+            tx_link_up();
+        }
+#endif
         break;
     }
 
@@ -377,6 +412,22 @@ static void heartbeat_tx_task(void *pvParameters)
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
+
+        /* ---- ACK超时检测:发送第N拍前,检查第N-1拍是否已被ACK ----
+         * (上一拍发出后已过整个 HEARTBEAT_INTERVAL_MS,ACK时间充裕) */
+        if (msg_id > 1 && s_hb_last_acked_id < msg_id - 1)
+        {
+            s_hb_miss_count++;
+            ESP_LOGW(TAG, "%s: Heartbeat[%lu] no ACK (miss %lu/%d)",
+                     mod->name, (unsigned long)(msg_id - 1),
+                     (unsigned long)s_hb_miss_count, HEARTBEAT_MISS_LINK_DOWN);
+            if (s_tx_link_up && s_hb_miss_count >= HEARTBEAT_MISS_LINK_DOWN)
+            {
+                s_tx_link_up = false;
+                tx_link_down();
+            }
+        }
+
         uint16_t cmd_len = 0;
         cmd_status_t st = heartbeat_write(cmd_buf, sizeof(cmd_buf), &cmd_len, msg_id);
         if (st == CMD_SUCCESS)
