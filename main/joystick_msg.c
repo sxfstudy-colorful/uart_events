@@ -44,16 +44,15 @@ cmd_status_t joystick_msg_write(uint8_t *tx_buf, uint16_t tx_buf_len, uint16_t *
 cmd_status_t heartbeat_write(uint8_t *tx_buf, uint16_t tx_buf_len, uint16_t *tx_len,
                              uint32_t msg_id)
 {
-    // desc_count=0:引擎只写type+msg_id共5字节,src_struct不会被访问
     return cmd_data_write(
         tx_buf, tx_buf_len, tx_len, heart_beat_pkt_type, msg_id,
         NULL, 0, NULL, 0);
 }
 
-cmd_status_t link_ack_write(uint8_t *tx_buf, uint16_t tx_buf_len, uint16_t *tx_len,
-                            uint32_t acked_msg_id)
+cmd_status_t heartbeat_ack_write(uint8_t *tx_buf, uint16_t tx_buf_len, uint16_t *tx_len,
+                                 uint32_t acked_msg_id)
 {
     return cmd_data_write(
-        tx_buf, tx_buf_len, tx_len, link_ack_pkt_type, acked_msg_id,
+        tx_buf, tx_buf_len, tx_len, heart_beat_ack_pkt_type, acked_msg_id,
         NULL, 0, NULL, 0);
 }
